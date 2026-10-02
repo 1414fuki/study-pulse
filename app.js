@@ -40,6 +40,7 @@ const els = {
   timerSubjectSelect: document.getElementById('timerSubjectSelect'),
   subjectNameInput: document.getElementById('subjectNameInput'),
   addSubjectButton: document.getElementById('addSubjectButton'),
+  subjectList: document.getElementById('subjectList'),
   statsSummary: document.getElementById('statsSummary'),
   installButton: document.getElementById('installButton'),
   screenFeed: document.getElementById('screenFeed'),
@@ -119,7 +120,8 @@ function syncSettingsInputs() {
     }
   };
 
-  renderSelect(els.timerSubjectSelect, state.subjects[0] || '');
+  const selectedSubject = els.timerSubjectSelect?.value || state.subjects[0] || '';
+  renderSelect(els.timerSubjectSelect, selectedSubject);
 
   if (els.alarmPreview) {
     if (state.settings.alarmVideoUrl) {
@@ -382,8 +384,43 @@ function addSubject(subjectName) {
   if (els.subjectNameInput) els.subjectNameInput.value = '';
   saveState();
   syncSettingsInputs();
+  renderSubjectList();
   renderStats();
   return subject;
+}
+
+function removeSubject(subjectName) {
+  const subject = String(subjectName || '').trim();
+  if (!subject) return null;
+
+  state.subjects = state.subjects.filter((value) => value !== subject);
+  if (els.timerSubjectSelect && els.timerSubjectSelect.value === subject) {
+    els.timerSubjectSelect.value = '';
+  }
+
+  saveState();
+  syncSettingsInputs();
+  renderSubjectList();
+  renderStats();
+  return subject;
+}
+
+function renderSubjectList() {
+  if (!els.subjectList) return;
+
+  if (!state.subjects.length) {
+    els.subjectList.innerHTML = '<div class="subject-empty">教科なし</div>';
+    return;
+  }
+
+  els.subjectList.innerHTML = state.subjects
+    .map((subject) => `
+      <div class="subject-chip">
+        <span>${escapeHtml(subject)}</span>
+        <button type="button" class="subject-remove" data-remove-subject="${escapeHtml(subject)}" aria-label="${escapeHtml(subject)}を削除">×</button>
+      </div>
+    `)
+    .join('');
 }
 
 function getDailyStats() {
@@ -392,19 +429,23 @@ function getDailyStats() {
   const studyToday = state.logs.filter((entry) => entry.mode === 'study' && new Date(entry.at) >= today);
   const totalStudy = state.logs.filter((entry) => entry.mode === 'study');
 
+  const activeSubjects = [...new Set((state.subjects || []).map((subject) => String(subject).trim()).filter(Boolean))];
+
   const bySubject = {};
   totalStudy.forEach((entry) => {
     const subject = entry.subject || '未分類';
+    if (!activeSubjects.includes(subject)) return;
     bySubject[subject] = (bySubject[subject] || 0) + Number(entry.durationMinutes || 0);
   });
 
   const todayBySubject = {};
   studyToday.forEach((entry) => {
     const subject = entry.subject || '未分類';
+    if (!activeSubjects.includes(subject)) return;
     todayBySubject[subject] = (todayBySubject[subject] || 0) + Number(entry.durationMinutes || 0);
   });
 
-  const allSubjects = [...new Set([...((state.subjects || []).map((subject) => String(subject).trim()).filter(Boolean)), ...Object.keys(bySubject)])];
+  const allSubjects = [...new Set([...activeSubjects, ...Object.keys(bySubject)])];
   const subjectAverages = allSubjects.map((subject) => {
     const entries = totalStudy.filter((entry) => (entry.subject || '未分類') === subject);
     const totalMinutes = entries.reduce((sum, entry) => sum + Number(entry.durationMinutes || 0), 0);
@@ -427,7 +468,7 @@ function getDailyStats() {
 function renderStats() {
   if (!els.statsSummary) return;
   const summary = getDailyStats();
-  const allSubjects = [...new Set([...state.subjects, ...summary.subjectAverages.map((item) => item.subject)])];
+  const allSubjects = [...new Set([...state.subjects, ...summary.subjectAverages.map((item) => item.subject)])].filter(Boolean);
 
   const subjectTodayCards = allSubjects.length
     ? allSubjects
@@ -469,6 +510,7 @@ function goToScreen(target) {
 }
 
 function renderAll() {
+  renderSubjectList();
   renderStats();
   syncSettingsInputs();
   updateTimerDisplay();
@@ -588,6 +630,15 @@ function bindEvents() {
         event.preventDefault();
         addSubject(els.subjectNameInput.value);
       }
+    });
+  }
+
+  if (els.subjectList) {
+    els.subjectList.addEventListener('click', (event) => {
+      const target = event.target.closest('[data-remove-subject]');
+      if (!target) return;
+      const subject = target.getAttribute('data-remove-subject');
+      removeSubject(subject);
     });
   }
 

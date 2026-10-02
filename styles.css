@@ -388,6 +388,42 @@ textarea {
   gap: 8px;
 }
 
+.subject-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.subject-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: #2c3d6d;
+  border: 1px solid rgba(67, 103, 243, 0.18);
+  font-size: 0.82rem;
+}
+
+.subject-remove {
+  border: none;
+  background: transparent;
+  color: var(--danger);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.subject-empty {
+  color: var(--muted);
+  font-size: 0.8rem;
+  padding-top: 6px;
+}
+
 .task-item,
 .routine-item,
 .log-item {
