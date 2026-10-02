@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#d94747" />
+    <title>Study Pulse</title>
+    <link rel="manifest" href="manifest.json" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="mode-study">
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">個人用学習アシスタント</p>
+          <h1>Study Pulse</h1>
+        </div>
+        <button id="installButton" class="install-btn hidden" type="button">ホーム画面へ追加</button>
+      </header>
+
+      <main class="layout">
+        <section class="panel timer-panel">
+          <div id="modeBadge" class="mode-badge mode-study">勉強中</div>
+          <div id="timerDisplay" class="timer-display">25:00</div>
+
+          <div class="timer-actions">
+            <button id="startPauseButton" class="primary" type="button">開始</button>
+            <button id="resetButton" class="secondary" type="button">リセット</button>
+            <button id="switchModeButton" class="secondary" type="button">休憩へ</button>
+            <button id="alarmStopButton" class="danger hidden" type="button">止める</button>
+          </div>
+
+          <div class="duration-controls">
+            <label>
+              <span>勉強</span>
+              <div class="field-with-unit">
+                <input id="studyMinutesInput" type="number" min="1" max="180" value="25" />
+                <span>分</span>
+              </div>
+            </label>
+            <label>
+              <span>休憩</span>
+              <div class="field-with-unit">
+                <input id="breakMinutesInput" type="number" min="1" max="120" value="5" />
+                <span>分</span>
+              </div>
+            </label>
+          </div>
+
+          <div class="focus-tools">
+            <label>
+              <span>今日の目標・自由記入</span>
+              <input id="focusInput" type="text" maxlength="80" placeholder="例: 英文法 20問・英単語 10個" />
+            </label>
+
+            <div class="picker-row">
+              <select id="taskPresetSelector">
+                <option value="">今日のやることから選ぶ</option>
+              </select>
+              <button id="pickTaskButton" class="secondary" type="button">選ぶ</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>今日のやること</h2>
+          </div>
+
+          <form id="taskForm" class="stack-form">
+            <input id="taskInput" type="text" maxlength="80" placeholder="例: 英文法 20問・英単語 10個" />
+            <button type="submit" class="primary">追加</button>
+          </form>
+
+          <ul id="taskList" class="task-list"></ul>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>ルーティン</h2>
+            <button id="addRoutineButton" class="mini-btn" type="button">＋ 追加</button>
+          </div>
+
+          <div id="routineList" class="routine-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>ログと分析</h2>
+          </div>
+
+          <div class="range-switcher">
+            <button class="range-btn active" data-range="day" type="button">1日</button>
+            <button class="range-btn" data-range="week" type="button">1週</button>
+            <button class="range-btn" data-range="month" type="button">1か月</button>
+            <button class="range-btn" data-range="quarter" type="button">3か月</button>
+          </div>
+
+          <canvas id="chartCanvas" width="320" height="180"></canvas>
+          <div id="summaryStats" class="summary-stats"></div>
+
+          <div class="log-tabs">
+            <button class="log-btn active" data-log-filter="all" type="button">すべて</button>
+            <button class="log-btn" data-log-filter="yes" type="button">できた</button>
+            <button class="log-btn" data-log-filter="no" type="button">できなかった</button>
+          </div>
+
+          <ul id="logList" class="log-list"></ul>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>設定</h2>
+          </div>
+
+          <div class="setting-row">
+            <label for="alarmType">アラーム</label>
+            <select id="alarmType">
+              <option value="beep">標準ビープ</option>
+              <option value="custom">カスタム音声URL</option>
+            </select>
+          </div>
+
+          <div class="setting-row">
+            <label for="customSoundUrl">音声URL</label>
+            <input id="customSoundUrl" type="url" placeholder="https://example.com/alarm.mp3" />
+          </div>
+
+          <div class="setting-row">
+            <label for="audioFileInput">ローカル音声ファイル</label>
+            <input id="audioFileInput" type="file" accept="audio/*" />
+          </div>
+
+          <div class="setting-row">
+            <label for="videoFileInput">スマホ動画アップロード</label>
+            <input id="videoFileInput" type="file" accept="video/*" />
+          </div>
+
+          <div class="setting-row">
+            <label for="videoUrlInput">動画URL</label>
+            <input id="videoUrlInput" type="url" placeholder="https://example.com/alarm.mp4" />
+          </div>
+
+          <video id="alarmPreview" class="alarm-preview hidden" playsinline muted controls></video>
+
+          <div class="setting-actions">
+            <button id="testAlarmButton" class="secondary" type="button">アラームを試す</button>
+            <button id="clearDataButton" class="danger" type="button">全データ削除</button>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="reflectionModal" class="modal hidden" aria-modal="true" role="dialog">
+      <div class="modal-card">
+        <h3>振り返り</h3>
+
+        <form id="reflectionForm" class="stack-form">
+          <label>
+            実行できたか
+            <select id="completionStatus">
+              <option value="yes">Yes</option>
+              <option value="no">No</option>
+            </select>
+          </label>
+
+          <label>
+            理解度
+            <div class="rating-row">
+              <label><input type="radio" name="understanding" value="1" /> 1</label>
+              <label><input type="radio" name="understanding" value="2" /> 2</label>
+              <label><input type="radio" name="understanding" value="3" /> 3</label>
+            </div>
+          </label>
+
+          <label>
+            実行したこと
+            <textarea id="reflectionNote" rows="3" placeholder="その場でメモを残せます"></textarea>
+          </label>
+
+          <label>
+            次回予約
+            <div class="inline-grid">
+              <input id="nextMinutes" type="number" min="1" max="180" value="25" placeholder="分" />
+              <input id="nextSubject" type="text" placeholder="教科" />
+            </div>
+          </label>
+
+          <div class="modal-actions">
+            <button type="submit" class="primary">保存</button>
+            <button type="button" id="closeReflectionButton" class="secondary">閉じる</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
