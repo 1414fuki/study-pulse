@@ -1,4 +1,4 @@
-const CACHE_NAME = 'study-pulse-v1';
+const CACHE_NAME = 'study-pulse-v2';
 const ASSETS = ['./', './index.html', './styles.css', './app.js', './manifest.json'];
 
 self.addEventListener('install', (event) => {
