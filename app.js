@@ -1,11 +1,11 @@
 const STORAGE_KEY = 'study-pulse-state-v1';
 let timerInterval = null;
 let alarmInterval = null;
-let currentRange = 'day';
-let currentLogFilter = 'all';
-let pendingReflection = null;
 let alarmSequenceCount = 0;
 let alarmStopRequested = false;
+let alarmToneTimers = [];
+let alarmAudioElements = [];
+let alarmVideoElement = null;
 
 const defaultState = {
   settings: {
@@ -22,16 +22,8 @@ const defaultState = {
     startedAt: null,
     lastUpdatedAt: Date.now(),
   },
-  tasks: [
-    { id: crypto.randomUUID(), text: '英単語 10個', done: false, createdAt: Date.now() },
-    { id: crypto.randomUUID(), text: '数学 1問復習', done: true, createdAt: Date.now() },
-  ],
-  routines: [
-    { id: crypto.randomUUID(), name: '英語', start: '19:00', end: '19:25', type: 'daily', enabled: true },
-    { id: crypto.randomUUID(), name: '数学', start: '20:00', end: '20:25', type: 'today', enabled: true },
-  ],
+  subjects: ['英語', '数学', '国語'],
   logs: [],
-  reflections: [],
 };
 
 const state = loadState();
@@ -44,33 +36,12 @@ const els = {
   switchModeButton: document.getElementById('switchModeButton'),
   resetButton: document.getElementById('resetButton'),
   alarmStopButton: document.getElementById('alarmStopButton'),
-  focusInput: document.getElementById('focusInput'),
-  taskPresetSelector: document.getElementById('taskPresetSelector'),
-  pickTaskButton: document.getElementById('pickTaskButton'),
-  taskForm: document.getElementById('taskForm'),
-  taskInput: document.getElementById('taskInput'),
-  taskList: document.getElementById('taskList'),
-  routineList: document.getElementById('routineList'),
-  addRoutineButton: document.getElementById('addRoutineButton'),
-  summaryStats: document.getElementById('summaryStats'),
-  logList: document.getElementById('logList'),
-  chartCanvas: document.getElementById('chartCanvas'),
-  alarmType: document.getElementById('alarmType'),
-  customSoundUrl: document.getElementById('customSoundUrl'),
-  audioFileInput: document.getElementById('audioFileInput'),
-  videoFileInput: document.getElementById('videoFileInput'),
-  videoUrlInput: document.getElementById('videoUrlInput'),
-  alarmPreview: document.getElementById('alarmPreview'),
-  testAlarmButton: document.getElementById('testAlarmButton'),
-  clearDataButton: document.getElementById('clearDataButton'),
-  reflectionModal: document.getElementById('reflectionModal'),
-  reflectionForm: document.getElementById('reflectionForm'),
-  completionStatus: document.getElementById('completionStatus'),
-  nextMinutes: document.getElementById('nextMinutes'),
-  nextSubject: document.getElementById('nextSubject'),
-  reflectionNote: document.getElementById('reflectionNote'),
-  closeReflectionButton: document.getElementById('closeReflectionButton'),
+  timerSubjectSelect: document.getElementById('timerSubjectSelect'),
+  statsSummary: document.getElementById('statsSummary'),
   installButton: document.getElementById('installButton'),
+  screenFeed: document.getElementById('screenFeed'),
+  screenTabs: Array.from(document.querySelectorAll('.screen-tab')),
+  featureScreens: Array.from(document.querySelectorAll('.feature-screen')),
 };
 
 function loadState() {
@@ -84,10 +55,8 @@ function loadState() {
       ...parsed,
       settings: { ...defaultState.settings, ...(parsed.settings || {}) },
       timer: { ...defaultState.timer, ...(parsed.timer || {}) },
-      tasks: Array.isArray(parsed.tasks) ? parsed.tasks : defaultState.tasks,
-      routines: Array.isArray(parsed.routines) ? parsed.routines : defaultState.routines,
+      subjects: Array.isArray(parsed.subjects) && parsed.subjects.length ? parsed.subjects : defaultState.subjects,
       logs: Array.isArray(parsed.logs) ? parsed.logs : [],
-      reflections: Array.isArray(parsed.reflections) ? parsed.reflections : [],
     };
   } catch (error) {
     return structuredClone(defaultState);
@@ -129,17 +98,32 @@ function updateTimerDisplay() {
 }
 
 function syncSettingsInputs() {
-  els.studyMinutesInput.value = state.settings.studyMinutes;
-  els.breakMinutesInput.value = state.settings.breakMinutes;
-  els.alarmType.value = state.settings.alarmType;
-  els.customSoundUrl.value = state.settings.customSoundUrl;
-  els.videoUrlInput.value = state.settings.alarmVideoUrl;
+  if (els.studyMinutesInput) els.studyMinutesInput.value = state.settings.studyMinutes;
+  if (els.breakMinutesInput) els.breakMinutesInput.value = state.settings.breakMinutes;
+  if (els.alarmType) els.alarmType.value = state.settings.alarmType;
+  if (els.customSoundUrl) els.customSoundUrl.value = state.settings.customSoundUrl;
+  if (els.videoUrlInput) els.videoUrlInput.value = state.settings.alarmVideoUrl;
 
-  if (state.settings.alarmVideoUrl) {
-    els.alarmPreview.src = state.settings.alarmVideoUrl;
-    els.alarmPreview.classList.remove('hidden');
-  } else {
-    els.alarmPreview.classList.add('hidden');
+  const subjects = [...new Set(state.subjects || [])];
+  const renderSelect = (select, selectedValue, includePlaceholder = true) => {
+    if (!select) return;
+    const currentValue = selectedValue || '';
+    const options = includePlaceholder ? ['<option value="">教科を選ぶ</option>'] : [];
+    select.innerHTML = options.concat(subjects.map((subject) => `<option value="${escapeHtml(subject)}" ${subject === currentValue ? 'selected' : ''}>${escapeHtml(subject)}</option>`)).join('');
+    if (!subjects.includes(currentValue) && currentValue) {
+      select.value = currentValue;
+    }
+  };
+
+  renderSelect(els.timerSubjectSelect, state.subjects[0] || '');
+
+  if (els.alarmPreview) {
+    if (state.settings.alarmVideoUrl) {
+      els.alarmPreview.src = state.settings.alarmVideoUrl;
+      els.alarmPreview.classList.remove('hidden');
+    } else {
+      els.alarmPreview.classList.add('hidden');
+    }
   }
 }
 
@@ -188,12 +172,35 @@ function playTone(freq = 880, duration = 220) {
 
 function updateAlarmControls() {
   const active = !!alarmInterval;
-  const shouldShow = active && alarmSequenceCount < 5;
-  els.alarmStopButton.classList.toggle('hidden', !shouldShow);
+  els.alarmStopButton.classList.toggle('hidden', !active);
 }
 
 function stopAlarmSequence() {
   alarmStopRequested = true;
+
+  alarmToneTimers.forEach((timer) => clearInterval(timer));
+  alarmToneTimers = [];
+
+  alarmAudioElements.forEach((audio) => {
+    try {
+      audio.pause();
+      audio.currentTime = 0;
+    } catch (error) {
+      // no-op
+    }
+  });
+  alarmAudioElements = [];
+
+  if (alarmVideoElement) {
+    try {
+      alarmVideoElement.pause();
+    } catch (error) {
+      // no-op
+    }
+    alarmVideoElement.remove();
+    alarmVideoElement = null;
+  }
+
   if (alarmInterval) {
     clearInterval(alarmInterval);
     alarmInterval = null;
@@ -204,7 +211,7 @@ function stopAlarmSequence() {
 
 function playAlarmVideo() {
   const videoUrl = state.settings.alarmVideoUrl;
-  if (!videoUrl) return;
+  if (!videoUrl || alarmStopRequested) return;
 
   const overlay = document.getElementById('alarmVideoOverlay') || document.createElement('video');
   overlay.id = 'alarmVideoOverlay';
@@ -225,17 +232,25 @@ function playAlarmVideo() {
     document.body.appendChild(overlay);
   }
 
+  alarmVideoElement = overlay;
   overlay.play().catch(() => {});
-  setTimeout(() => {
-    overlay.remove();
+  const timeout = setTimeout(() => {
+    if (alarmVideoElement === overlay) {
+      overlay.remove();
+      alarmVideoElement = null;
+    }
   }, 3500);
+  alarmToneTimers.push(timeout);
 }
 
 function playAlarmSound() {
+  if (alarmStopRequested) return;
+
   const type = state.settings.alarmType;
   if (type === 'custom' && state.settings.customSoundUrl) {
     const audio = new Audio(state.settings.customSoundUrl);
     audio.volume = 1;
+    alarmAudioElements.push(audio);
     audio.play().catch(() => {});
   }
 
@@ -244,10 +259,15 @@ function playAlarmSound() {
   const pattern = [880, 660, 880, 660];
   let index = 0;
   const interval = setInterval(() => {
+    if (alarmStopRequested) {
+      clearInterval(interval);
+      return;
+    }
     playTone(pattern[index % pattern.length], 220);
     index += 1;
     if (index >= 12) clearInterval(interval);
   }, 260);
+  alarmToneTimers.push(interval);
 }
 
 function startAlarmSequence() {
@@ -255,27 +275,22 @@ function startAlarmSequence() {
   alarmSequenceCount = 0;
   if (alarmInterval) clearInterval(alarmInterval);
 
-  const trigger = () => {
-    if (alarmStopRequested) return;
-    alarmSequenceCount += 1;
-    playAlarmSound();
-    updateAlarmControls();
+  playAlarmSound();
+  updateAlarmControls();
 
-    if (alarmSequenceCount >= 5) {
-      const continueLoop = setInterval(() => {
-        if (alarmStopRequested) {
-          clearInterval(continueLoop);
-          return;
-        }
-        playAlarmSound();
-      }, 30000);
-      if (alarmInterval) clearInterval(alarmInterval);
-      alarmInterval = continueLoop;
-      updateAlarmControls();
-    }
-  };
+  if (state.timer.mode === 'study') {
+    alarmInterval = setInterval(() => {
+      if (alarmStopRequested) {
+        clearInterval(alarmInterval);
+        alarmInterval = null;
+        updateAlarmControls();
+        return;
+      }
+      playAlarmSound();
+    }, 5000);
+    return;
+  }
 
-  trigger();
   alarmInterval = setInterval(() => {
     if (alarmStopRequested) {
       clearInterval(alarmInterval);
@@ -283,9 +298,8 @@ function startAlarmSequence() {
       updateAlarmControls();
       return;
     }
-    trigger();
+    stopAlarmSequence();
   }, 5000);
-  updateAlarmControls();
 }
 
 function startTimer() {
@@ -324,10 +338,10 @@ function startTimer() {
 
 function handleTimerComplete() {
   startAlarmSequence();
-  notifyUser(state.timer.mode === 'study' ? '勉強時間が終了しました。振り返りを残してください。' : '休憩時間が終了しました。');
+  notifyUser(state.timer.mode === 'study' ? '勉強時間が終了しました。止めるまで継続中です。' : '休憩時間が終了しました。');
 
   const mode = state.timer.mode;
-  const subject = state.tasks[0]?.text || '学習';
+  const subject = (els.timerSubjectSelect?.value || '').trim() || '未分類';
 
   state.logs.push({
     id: crypto.randomUUID(),
@@ -335,375 +349,101 @@ function handleTimerComplete() {
     title: mode === 'study' ? '勉強' : '休憩',
     durationMinutes: mode === 'study' ? state.settings.studyMinutes : state.settings.breakMinutes,
     subject,
-    status: 'pending',
     mode,
   });
 
   saveState();
 
   if (mode === 'study') {
-    pendingReflection = {
-      startedAt: Date.now(),
-      subject,
-    };
-    els.reflectionModal.classList.remove('hidden');
-    els.nextMinutes.value = state.settings.studyMinutes;
-    els.nextSubject.value = subject;
-  } else {
-    setTimerState('study');
-  }
-
-  renderAll();
-}
-
-function closeReflection() {
-  els.reflectionModal.classList.add('hidden');
-  pendingReflection = null;
-  stopAlarmSequence();
-}
-
-function registerReflection(event) {
-  event.preventDefault();
-
-  const selected = document.querySelector('input[name="understanding"]:checked');
-  const status = els.completionStatus.value;
-  const note = els.reflectionNote.value.trim();
-  const minutes = Number(els.nextMinutes.value) || state.settings.studyMinutes;
-  const subject = els.nextSubject.value.trim() || '未設定';
-
-  const lastLog = [...state.logs].reverse().find((entry) => entry.mode === 'study' && entry.status === 'pending');
-  if (lastLog) {
-    lastLog.status = status === 'yes' ? 'yes' : 'no';
-    lastLog.reflect = {
-      understanding: selected ? Number(selected.value) : 2,
-      note,
-      nextMinutes: minutes,
-      nextSubject: subject,
-      savedAt: Date.now(),
-    };
-  }
-
-  state.reflections.push({
-    id: crypto.randomUUID(),
-    status,
-    understanding: selected ? Number(selected.value) : 2,
-    note,
-    nextMinutes: minutes,
-    nextSubject: subject,
-    createdAt: Date.now(),
-  });
-
-  saveState();
-  closeReflection();
-  setTimerState('break');
-  renderAll();
-}
-
-function addTask(text, forceChecked = false) {
-  const value = text.trim();
-  if (!value) return;
-
-  const existing = state.tasks.find((task) => task.text === value);
-  if (existing) {
-    existing.done = forceChecked || existing.done;
+    state.timer.running = false;
+    state.timer.remainingSeconds = state.settings.studyMinutes * 60;
+    updateTimerDisplay();
     saveState();
-    renderAll();
     return;
   }
 
-  state.tasks.unshift({
-    id: crypto.randomUUID(),
-    text: value,
-    done: forceChecked,
-    createdAt: Date.now(),
-  });
-  saveState();
+  setTimerState('study');
   renderAll();
 }
 
-function toggleTask(id) {
-  const task = state.tasks.find((item) => item.id === id);
-  if (!task) return;
-  task.done = !task.done;
-  saveState();
-  renderTasks();
-}
+function addSubject(subjectName) {
+  const subject = subjectName.trim();
+  if (!subject) return null;
+  const normalized = subject.replace(/\s+/g, '');
+  if (!normalized) return null;
 
-function deleteTask(id) {
-  state.tasks = state.tasks.filter((item) => item.id !== id);
-  saveState();
-  renderTasks();
-}
-
-function renderTasks() {
-  els.taskList.innerHTML = '';
-
-  state.tasks.forEach((task) => {
-    const item = document.createElement('li');
-    item.className = `task-item ${task.done ? 'checked' : ''}`;
-    item.innerHTML = `
-      <input type="checkbox" ${task.done ? 'checked' : ''} />
-      <span class="task-text">${escapeHtml(task.text)}</span>
-      <button type="button" class="mini-btn delete-task" data-id="${task.id}">削除</button>
-    `;
-
-    const checkbox = item.querySelector('input');
-    checkbox.addEventListener('change', () => toggleTask(task.id));
-
-    item.querySelector('.delete-task').addEventListener('click', () => deleteTask(task.id));
-    els.taskList.appendChild(item);
-  });
-
-  renderPresetSelector();
-}
-
-function renderPresetSelector() {
-  els.taskPresetSelector.innerHTML = '<option value="">今日のやることから選ぶ</option>';
-
-  state.tasks.forEach((task) => {
-    const option = document.createElement('option');
-    option.value = task.text;
-    option.textContent = task.text;
-    els.taskPresetSelector.appendChild(option);
-  });
-}
-
-function addRoutine() {
-  const name = prompt('ルーティン名を入力してください', '読書');
-  if (!name) return;
-
-  state.routines.push({
-    id: crypto.randomUUID(),
-    name: name.trim(),
-    start: '09:00',
-    end: '09:25',
-    type: 'daily',
-    enabled: true,
-  });
-  saveState();
-  renderRoutines();
-}
-
-function deleteRoutine(id) {
-  state.routines = state.routines.filter((routine) => routine.id !== id);
-  saveState();
-  renderRoutines();
-}
-
-function toggleRoutine(id) {
-  const routine = state.routines.find((item) => item.id === id);
-  if (!routine) return;
-  routine.enabled = !routine.enabled;
-  saveState();
-  renderRoutines();
-}
-
-function changeRoutine(id, field, value) {
-  const routine = state.routines.find((item) => item.id === id);
-  if (!routine) return;
-  routine[field] = value;
-  saveState();
-  renderRoutines();
-}
-
-function renderRoutines() {
-  els.routineList.innerHTML = '';
-  state.routines.forEach((routine) => {
-    const item = document.createElement('li');
-    item.className = 'routine-item';
-    item.innerHTML = `
-      <div class="routine-top">
-        <div>
-          <strong>${escapeHtml(routine.name)}</strong>
-          <div class="routine-meta">${escapeHtml(routine.start)} - ${escapeHtml(routine.end)}</div>
-        </div>
-        <div class="routine-actions">
-          <button type="button" class="mini-btn toggle-routine" data-id="${routine.id}">${routine.enabled ? '有効' : '無効'}</button>
-          <button type="button" class="mini-btn delete-routine" data-id="${routine.id}">削除</button>
-        </div>
-      </div>
-      <div class="routine-meta">
-        <label>種類
-          <select data-field="type" data-id="${routine.id}">
-            <option value="daily" ${routine.type === 'daily' ? 'selected' : ''}>毎日</option>
-            <option value="today" ${routine.type === 'today' ? 'selected' : ''}>今日だけ</option>
-            <option value="weekly" ${routine.type === 'weekly' ? 'selected' : ''}>曜日ごと</option>
-          </select>
-        </label>
-      </div>
-      <div class="routine-meta">
-        <label>開始 <input type="time" value="${routine.start}" data-field="start" data-id="${routine.id}" /></label>
-        <label>終了 <input type="time" value="${routine.end}" data-field="end" data-id="${routine.id}" /></label>
-      </div>
-    `;
-
-    item.querySelector('.toggle-routine').addEventListener('click', () => toggleRoutine(routine.id));
-    item.querySelector('.delete-routine').addEventListener('click', () => deleteRoutine(routine.id));
-
-    item.querySelectorAll('input, select').forEach((control) => {
-      control.addEventListener('change', (event) => {
-        const field = event.target.dataset.field;
-        const id = event.target.dataset.id;
-        changeRoutine(id, field, event.target.value);
-      });
-    });
-
-    els.routineList.appendChild(item);
-  });
-}
-
-function getRangeDates() {
-  const now = new Date();
-  const start = new Date(now);
-
-  if (currentRange === 'day') {
-    start.setHours(0, 0, 0, 0);
+  if (!state.subjects.includes(subject)) {
+    state.subjects.push(subject);
   }
-  if (currentRange === 'week') {
-    const day = start.getDay();
-    const diff = (day === 0 ? -6 : 1 - day);
-    start.setDate(start.getDate() + diff);
-    start.setHours(0, 0, 0, 0);
-  }
-  if (currentRange === 'month') {
-    start.setDate(1);
-    start.setHours(0, 0, 0, 0);
-  }
-  if (currentRange === 'quarter') {
-    start.setMonth(start.getMonth() - 2);
-    start.setDate(1);
-    start.setHours(0, 0, 0, 0);
-  }
-
-  return { start, end: new Date() };
+  saveState();
+  return subject;
 }
 
-function renderStats() {
-  const { start, end } = getRangeDates();
-  const logs = state.logs.filter((entry) => {
-    const at = new Date(entry.at);
-    return at >= start && at <= end;
-  });
-
-  const totalMinutes = logs
-    .filter((entry) => entry.mode === 'study')
-    .reduce((sum, entry) => sum + Number(entry.durationMinutes || 0), 0);
+function getDailyStats() {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const studyToday = state.logs.filter((entry) => entry.mode === 'study' && new Date(entry.at) >= today);
+  const totalStudy = state.logs.filter((entry) => entry.mode === 'study');
 
   const bySubject = {};
-  logs.filter((entry) => entry.mode === 'study').forEach((entry) => {
+  totalStudy.forEach((entry) => {
     const subject = entry.subject || '未分類';
     bySubject[subject] = (bySubject[subject] || 0) + Number(entry.durationMinutes || 0);
   });
 
-  const successful = logs.filter((entry) => entry.status === 'yes').length;
-  const failed = logs.filter((entry) => entry.status === 'no').length;
-  const averageMinutes = logs.length ? Math.round(totalMinutes / Math.max(1, (logs.filter((entry) => entry.mode === 'study')).length)) : 0;
+  const allSubjects = [...new Set([...((state.subjects || []).map((subject) => String(subject).trim()).filter(Boolean)), ...Object.keys(bySubject)])];
+  const subjectAverages = allSubjects.map((subject) => {
+    const entries = totalStudy.filter((entry) => (entry.subject || '未分類') === subject);
+    const totalMinutes = entries.reduce((sum, entry) => sum + Number(entry.durationMinutes || 0), 0);
+    const dateSet = new Set(entries.map((entry) => new Date(entry.at).toISOString().slice(0, 10)));
 
-  const cards = [
-    { label: '総勉強時間', value: `${totalMinutes}分` },
-    { label: '1日平均', value: `${averageMinutes}分` },
-    { label: '達成', value: `${successful}件` },
-    { label: '未達成', value: `${failed}件` },
+    return {
+      subject,
+      average: Math.round(totalMinutes / Math.max(dateSet.size, 1)),
+    };
+  });
+
+  return {
+    todayMinutes: studyToday.reduce((sum, entry) => sum + Number(entry.durationMinutes || 0), 0),
+    totalMinutes: totalStudy.reduce((sum, entry) => sum + Number(entry.durationMinutes || 0), 0),
+    subjectAverages,
+  };
+}
+
+function renderStats() {
+  if (!els.statsSummary) return;
+  const summary = getDailyStats();
+
+  const rows = [
+    { label: '今日の勉強時間', value: `${summary.todayMinutes}分` },
+    { label: '合計勉強時間', value: `${summary.totalMinutes}分` },
   ];
 
-  els.summaryStats.innerHTML = cards
-    .map((card) => `<div class="stat-card"><span>${card.label}</span><strong>${card.value}</strong></div>`)
-    .join('');
+  const subjectCards = summary.subjectAverages.length
+    ? summary.subjectAverages
+        .map((item) => `<div class="stat-card"><span>${escapeHtml(item.subject)}</span><strong>${item.average}分</strong></div>`)
+        .join('')
+    : '<div class="stat-card"><span>教科</span><strong>データなし</strong></div>';
 
-  drawChart(bySubject, logs, totalMinutes);
+  els.statsSummary.innerHTML = rows
+    .map((row) => `<div class="stat-card"><span>${row.label}</span><strong>${row.value}</strong></div>`)
+    .join('') + subjectCards;
 }
 
-function drawChart(bySubject, logs, totalMinutes) {
-  const canvas = els.chartCanvas;
-  const ctx = canvas.getContext('2d');
-  const width = canvas.width;
-  const height = canvas.height;
+function goToScreen(target) {
+  const screenIndex = els.featureScreens.findIndex((screen) => screen.dataset.screen === target);
+  if (screenIndex === -1) return;
 
-  ctx.clearRect(0, 0, width, height);
+  const nextScreen = els.featureScreens[screenIndex];
+  nextScreen.scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' });
 
-  const colorMap = ['#d94747', '#f39c12', '#3b82f6', '#2aae74', '#8b5cf6', '#ff70a6'];
-  const subjectNames = Object.keys(bySubject);
-
-  if (currentRange === 'day' && subjectNames.length > 0) {
-    let startAngle = -Math.PI / 2;
-    subjectNames.forEach((subject, index) => {
-      const ratio = bySubject[subject] / Math.max(totalMinutes, 1);
-      const endAngle = startAngle + ratio * Math.PI * 2;
-      ctx.beginPath();
-      ctx.moveTo(width / 2, height / 2);
-      ctx.arc(width / 2, height / 2, 58, startAngle, endAngle);
-      ctx.closePath();
-      ctx.fillStyle = colorMap[index % colorMap.length];
-      ctx.fill();
-      startAngle = endAngle;
-    });
-
-    ctx.beginPath();
-    ctx.arc(width / 2, height / 2, 26, 0, Math.PI * 2);
-    ctx.fillStyle = '#fff';
-    ctx.fill();
-    return;
-  }
-
-  const days = [];
-  const lastSeven = currentRange === 'week' ? 7 : currentRange === 'month' ? 30 : 90;
-  for (let i = 0; i < lastSeven; i += 1) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    days.unshift(d);
-  }
-
-  const dayTotals = days.map((day) => {
-    let total = 0;
-    logs.forEach((entry) => {
-      if (entry.mode === 'study') {
-        const date = new Date(entry.at);
-        if (date.toDateString() === day.toDateString()) total += Number(entry.durationMinutes || 0);
-      }
-    });
-    return total;
-  });
-
-  const chartMax = Math.max(...dayTotals, 1);
-  const chartWidth = width - 30;
-  const step = chartWidth / Math.max(dayTotals.length, 1);
-
-  dayTotals.forEach((value, index) => {
-    const barHeight = (value / chartMax) * 110;
-    const x = 18 + index * step + 4;
-    const y = 145 - barHeight;
-    ctx.fillStyle = '#4f7bf7';
-    ctx.fillRect(x, y, Math.max(8, step - 10), barHeight);
-  });
-}
-
-function renderLogs() {
-  const logs = [...state.logs].reverse();
-  const filtered = logs.filter((log) => {
-    if (currentLogFilter === 'yes') return log.status === 'yes';
-    if (currentLogFilter === 'no') return log.status === 'no';
-    return true;
-  });
-
-  els.logList.innerHTML = '';
-  filtered.slice(0, 20).forEach((log) => {
-    const item = document.createElement('li');
-    item.className = 'log-item';
-    item.dataset.status = log.status === 'yes' ? 'yes' : log.status === 'no' ? 'no' : 'pending';
-    item.innerHTML = `
-      <div><strong>${escapeHtml(log.title)}</strong> · ${escapeHtml(log.subject || '未分類')}</div>
-      <div class="log-meta">${new Date(log.at).toLocaleString()} · ${Number(log.durationMinutes || 0)}分</div>
-      <div class="log-meta">${log.status === 'yes' ? 'Yes' : log.status === 'no' ? 'No' : '未回答'}</div>
-    `;
-    els.logList.appendChild(item);
+  els.screenTabs.forEach((tab) => {
+    tab.classList.toggle('active', tab.dataset.target === target);
   });
 }
 
 function renderAll() {
-  renderTasks();
-  renderRoutines();
   renderStats();
-  renderLogs();
   syncSettingsInputs();
   updateTimerDisplay();
   applyModeStyles();
@@ -719,11 +459,11 @@ function resetTimer() {
 }
 
 function adjustSettingsFromInputs() {
-  state.settings.studyMinutes = Number(els.studyMinutesInput.value) || 25;
-  state.settings.breakMinutes = Number(els.breakMinutesInput.value) || 5;
-  state.settings.alarmType = els.alarmType.value;
-  state.settings.customSoundUrl = els.customSoundUrl.value.trim();
-  state.settings.alarmVideoUrl = els.videoUrlInput.value.trim();
+  if (els.studyMinutesInput) state.settings.studyMinutes = Number(els.studyMinutesInput.value) || 25;
+  if (els.breakMinutesInput) state.settings.breakMinutes = Number(els.breakMinutesInput.value) || 5;
+  if (els.alarmType) state.settings.alarmType = els.alarmType.value;
+  if (els.customSoundUrl) state.settings.customSoundUrl = els.customSoundUrl.value.trim();
+  if (els.videoUrlInput) state.settings.alarmVideoUrl = els.videoUrlInput.value.trim();
 
   if (state.timer.mode === 'study') {
     state.timer.remainingSeconds = state.settings.studyMinutes * 60;
@@ -792,82 +532,15 @@ function bindEvents() {
     setTimerState(nextMode);
   });
 
-  els.taskForm.addEventListener('submit', (event) => {
-    event.preventDefault();
-    const value = els.focusInput.value.trim() || els.taskInput.value.trim();
-    if (value) {
-      addTask(value, true);
-    }
-    els.taskInput.value = '';
-    els.focusInput.value = '';
-  });
-
-  els.pickTaskButton.addEventListener('click', () => {
-    const selected = els.taskPresetSelector.value;
-    if (!selected) return;
-    addTask(selected, true);
-    els.taskPresetSelector.value = '';
-  });
-
-  els.alarmStopButton.addEventListener('click', () => {
-    stopAlarmSequence();
-  });
-
-  els.addRoutineButton.addEventListener('click', addRoutine);
-
-  document.querySelectorAll('.range-btn').forEach((button) => {
-    button.addEventListener('click', () => {
-      currentRange = button.dataset.range;
-      document.querySelectorAll('.range-btn').forEach((btn) => btn.classList.toggle('active', btn === button));
-      renderStats();
+  if (els.alarmStopButton) {
+    els.alarmStopButton.addEventListener('click', () => {
+      stopAlarmSequence();
     });
+  }
+
+  els.screenTabs.forEach((tab) => {
+    tab.addEventListener('click', () => goToScreen(tab.dataset.target));
   });
-
-  document.querySelectorAll('.log-btn').forEach((button) => {
-    button.addEventListener('click', () => {
-      currentLogFilter = button.dataset.logFilter;
-      document.querySelectorAll('.log-btn').forEach((btn) => btn.classList.toggle('active', btn === button));
-      renderLogs();
-    });
-  });
-
-  els.studyMinutesInput.addEventListener('change', adjustSettingsFromInputs);
-  els.breakMinutesInput.addEventListener('change', adjustSettingsFromInputs);
-  els.alarmType.addEventListener('change', adjustSettingsFromInputs);
-  els.customSoundUrl.addEventListener('change', adjustSettingsFromInputs);
-  els.videoUrlInput.addEventListener('change', adjustSettingsFromInputs);
-
-  els.audioFileInput.addEventListener('change', async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    const dataUrl = await fileToDataUrl(file);
-    state.settings.customSoundUrl = dataUrl;
-    state.settings.alarmType = 'custom';
-    saveState();
-    renderAll();
-    playAlarmSound();
-  });
-
-  els.videoFileInput.addEventListener('change', async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    const dataUrl = await fileToDataUrl(file);
-    state.settings.alarmVideoUrl = dataUrl;
-    saveState();
-    renderAll();
-    playAlarmVideo();
-  });
-
-  els.testAlarmButton.addEventListener('click', () => {
-    playAlarmSound();
-    notifyUser('アラーム音をテスト再生しました');
-  });
-
-  els.clearDataButton.addEventListener('click', clearAllData);
-  els.reflectionForm.addEventListener('submit', registerReflection);
-  els.closeReflectionButton.addEventListener('click', closeReflection);
 
   if ('Notification' in window && Notification.permission === 'default') {
     Notification.requestPermission().catch(() => {});
