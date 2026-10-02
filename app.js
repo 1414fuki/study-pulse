@@ -23,6 +23,7 @@ const defaultState = {
     lastUpdatedAt: Date.now(),
   },
   subjects: ['英語', '数学', '国語'],
+  strengths: [],
   logs: [],
 };
 
@@ -37,6 +38,8 @@ const els = {
   resetButton: document.getElementById('resetButton'),
   alarmStopButton: document.getElementById('alarmStopButton'),
   timerSubjectSelect: document.getElementById('timerSubjectSelect'),
+  subjectNameInput: document.getElementById('subjectNameInput'),
+  addSubjectButton: document.getElementById('addSubjectButton'),
   statsSummary: document.getElementById('statsSummary'),
   installButton: document.getElementById('installButton'),
   screenFeed: document.getElementById('screenFeed'),
@@ -56,6 +59,7 @@ function loadState() {
       settings: { ...defaultState.settings, ...(parsed.settings || {}) },
       timer: { ...defaultState.timer, ...(parsed.timer || {}) },
       subjects: Array.isArray(parsed.subjects) && parsed.subjects.length ? parsed.subjects : defaultState.subjects,
+      strengths: Array.isArray(parsed.strengths) ? parsed.strengths : [],
       logs: Array.isArray(parsed.logs) ? parsed.logs : [],
     };
   } catch (error) {
@@ -367,7 +371,7 @@ function handleTimerComplete() {
 }
 
 function addSubject(subjectName) {
-  const subject = subjectName.trim();
+  const subject = String(subjectName || '').trim();
   if (!subject) return null;
   const normalized = subject.replace(/\s+/g, '');
   if (!normalized) return null;
@@ -375,7 +379,10 @@ function addSubject(subjectName) {
   if (!state.subjects.includes(subject)) {
     state.subjects.push(subject);
   }
+  if (els.subjectNameInput) els.subjectNameInput.value = '';
   saveState();
+  syncSettingsInputs();
+  renderStats();
   return subject;
 }
 
@@ -389,6 +396,12 @@ function getDailyStats() {
   totalStudy.forEach((entry) => {
     const subject = entry.subject || '未分類';
     bySubject[subject] = (bySubject[subject] || 0) + Number(entry.durationMinutes || 0);
+  });
+
+  const todayBySubject = {};
+  studyToday.forEach((entry) => {
+    const subject = entry.subject || '未分類';
+    todayBySubject[subject] = (todayBySubject[subject] || 0) + Number(entry.durationMinutes || 0);
   });
 
   const allSubjects = [...new Set([...((state.subjects || []).map((subject) => String(subject).trim()).filter(Boolean)), ...Object.keys(bySubject)])];
@@ -407,27 +420,40 @@ function getDailyStats() {
     todayMinutes: studyToday.reduce((sum, entry) => sum + Number(entry.durationMinutes || 0), 0),
     totalMinutes: totalStudy.reduce((sum, entry) => sum + Number(entry.durationMinutes || 0), 0),
     subjectAverages,
+    subjectDailyMinutes: todayBySubject,
   };
 }
 
 function renderStats() {
   if (!els.statsSummary) return;
   const summary = getDailyStats();
+  const allSubjects = [...new Set([...state.subjects, ...summary.subjectAverages.map((item) => item.subject)])];
+
+  const subjectTodayCards = allSubjects.length
+    ? allSubjects
+        .map((subject) => {
+          const minutes = summary.subjectDailyMinutes[subject] || 0;
+          return `<div class="stat-card"><span>${escapeHtml(subject)}</span><strong>${minutes}分</strong></div>`;
+        })
+        .join('')
+    : '<div class="stat-card"><span>教科</span><strong>データなし</strong></div>';
+
+  const averageCards = summary.subjectAverages.length
+    ? summary.subjectAverages
+        .map((item) => `<div class="stat-card"><span>${escapeHtml(item.subject)}</span><strong>${item.average}分</strong></div>`)
+        .join('')
+    : '<div class="stat-card"><span>教科</span><strong>データなし</strong></div>';
 
   const rows = [
     { label: '今日の勉強時間', value: `${summary.todayMinutes}分` },
     { label: '合計勉強時間', value: `${summary.totalMinutes}分` },
   ];
 
-  const subjectCards = summary.subjectAverages.length
-    ? summary.subjectAverages
-        .map((item) => `<div class="stat-card"><span>${escapeHtml(item.subject)}</span><strong>${item.average}分</strong></div>`)
-        .join('')
-    : '<div class="stat-card"><span>教科</span><strong>データなし</strong></div>';
-
-  els.statsSummary.innerHTML = rows
-    .map((row) => `<div class="stat-card"><span>${row.label}</span><strong>${row.value}</strong></div>`)
-    .join('') + subjectCards;
+  els.statsSummary.innerHTML = `
+    ${rows.map((row) => `<div class="stat-card"><span>${row.label}</span><strong>${row.value}</strong></div>`).join('')}
+    <div class="stat-section"><div class="stat-section-label">今日の教科別勉強時間</div><div class="stats-grid">${subjectTodayCards}</div></div>
+    <div class="stat-section"><div class="stat-section-label">教科ごとの1日平均</div><div class="stats-grid">${averageCards}</div></div>
+  `;
 }
 
 function goToScreen(target) {
@@ -531,6 +557,39 @@ function bindEvents() {
     const nextMode = state.timer.mode === 'study' ? 'break' : 'study';
     setTimerState(nextMode);
   });
+
+  if (els.studyMinutesInput) {
+    els.studyMinutesInput.addEventListener('change', () => {
+      state.settings.studyMinutes = Number(els.studyMinutesInput.value) || 25;
+      if (state.timer.mode === 'study') state.timer.remainingSeconds = state.settings.studyMinutes * 60;
+      saveState();
+      renderAll();
+    });
+  }
+
+  if (els.breakMinutesInput) {
+    els.breakMinutesInput.addEventListener('change', () => {
+      state.settings.breakMinutes = Number(els.breakMinutesInput.value) || 5;
+      if (state.timer.mode === 'break') state.timer.remainingSeconds = state.settings.breakMinutes * 60;
+      saveState();
+      renderAll();
+    });
+  }
+
+  if (els.addSubjectButton) {
+    els.addSubjectButton.addEventListener('click', () => {
+      addSubject(els.subjectNameInput?.value || '');
+    });
+  }
+
+  if (els.subjectNameInput) {
+    els.subjectNameInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        addSubject(els.subjectNameInput.value);
+      }
+    });
+  }
 
   if (els.alarmStopButton) {
     els.alarmStopButton.addEventListener('click', () => {
